@@ -420,7 +420,7 @@ if not exist "runtime\" mkdir "runtime"
 if exist "runtime\ffmpeg_tmp\" rmdir /s /q "runtime\ffmpeg_tmp"
 mkdir "runtime\ffmpeg_tmp"
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '%CD%\!FFMPEG_ZIP!' -DestinationPath '%CD%\runtime\ffmpeg_tmp' -Force"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '!FFMPEG_ZIP!' -DestinationPath '%CD%\runtime\ffmpeg_tmp' -Force"
 if errorlevel 1 (
     echo [WARN] FFmpeg zip extraction failed.
     exit /b 0

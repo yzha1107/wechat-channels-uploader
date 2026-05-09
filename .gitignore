@@ -1,0 +1,17 @@
+node_modules/
+browser-profile/
+browser-profile-*/
+uploads/
+screenshots/
+runtime/
+installers/*
+!installers/README.txt
+*.log
+*.xlsx
+results.csv
+batch-config.csv
+test-batch.csv
+accounts.json
+ark-api-key.txt
+.update-version
+.claude/

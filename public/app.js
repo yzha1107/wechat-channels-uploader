@@ -587,6 +587,9 @@ async function generateDoubaoExcel() {
     });
     lastExcelImport = data;
     renderEntries();
+    if (!uploadRunning && entries.length > 0) {
+      setTimeout(() => startUpload(), 0);
+    }
     toast('豆包 Excel 已生成并导入 ' + data.total + ' 条，新增 ' + added + '，更新 ' + updated, 'success');
     if (hint) hint.textContent = '已生成：' + data.path;
   } catch (err) {

@@ -8,6 +8,8 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = $PSScriptRoot
 $VersionFile = Join-Path $Root ".update-version"
+$LocalBackupDir = Join-Path $Root ".local-backup"
+$SensitiveFiles = @("ark-api-key.txt")
 $ArchiveUrl = $RepoUrl -replace "\.git$", ""
 $ArchiveUrl = "$ArchiveUrl/archive/refs/heads/$Branch.zip"
 $RepoApi = ($RepoUrl -replace "\.git$", "") -replace "^https://github\.com/", "https://api.github.com/repos/"
@@ -35,6 +37,27 @@ function Confirm-Update($Message) {
   Write-Host $Message
   $answer = Read-Host "Update now? [Y/n]"
   return ($answer -eq "" -or $answer -match "^(y|yes)$")
+}
+
+function Backup-LocalSecrets {
+  foreach ($name in $SensitiveFiles) {
+    $src = Join-Path $Root $name
+    if (Test-Path -LiteralPath $src) {
+      New-Item -ItemType Directory -Force -Path $LocalBackupDir | Out-Null
+      Copy-Item -LiteralPath $src -Destination (Join-Path $LocalBackupDir $name) -Force
+    }
+  }
+}
+
+function Restore-LocalSecrets {
+  foreach ($name in $SensitiveFiles) {
+    $dest = Join-Path $Root $name
+    $backup = Join-Path $LocalBackupDir $name
+    if ((-not (Test-Path -LiteralPath $dest)) -and (Test-Path -LiteralPath $backup)) {
+      Copy-Item -LiteralPath $backup -Destination $dest -Force
+      Write-Step "Restored local $name"
+    }
+  }
 }
 
 function Get-RemoteHeadSha {
@@ -92,10 +115,12 @@ function Invoke-GitUpdate {
     }
 
     Write-Step "Pulling updates..."
+    Backup-LocalSecrets
     git pull --ff-only origin $currentBranch
     if ($LASTEXITCODE -ne 0) {
       Finish-Warn "Git pull failed."
     }
+    Restore-LocalSecrets
 
     Write-Host "[ OK ] Updated from Git"
   } finally {
@@ -146,9 +171,10 @@ function Invoke-ZipUpdate {
     }
 
     Write-Step "Applying update while preserving local data..."
+    Backup-LocalSecrets
     $excludeDirs = @(
       ".git", "node_modules", "browser-profile", "browser-profile-*",
-      "uploads", "screenshots", "runtime", "installers", ".claude"
+      "uploads", "screenshots", "runtime", "installers", ".claude", ".local-backup"
     )
     $excludeFiles = @(
       "accounts.json", "results.csv", "upload.log", "batch-config.csv",
@@ -165,6 +191,7 @@ function Invoke-ZipUpdate {
     if ($code -ge 8) {
       Finish-Warn "File copy failed with robocopy code $code."
     }
+    Restore-LocalSecrets
 
     Set-Content -LiteralPath $VersionFile -Value $remoteCommit -Encoding ASCII
     Write-Host "[ OK ] Updated from GitHub zip"

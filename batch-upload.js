@@ -522,12 +522,17 @@ async function handleProductTimingDialog(page) {
       .locator('.sale-visible-dialog, .weui-desktop-dialog__wrp, .weui-desktop-dialog, .ant-modal, [role="dialog"]')
       .filter({ hasText: /选择商品出现时机|商品出现时机|视频播放5秒后出现|自定义出现时机/ })
       .last();
+    const visibleConfirm = dialog
+      .locator('button, .weui-desktop-btn_primary, .ant-btn-primary, [role="button"]')
+      .filter({ hasText: /^确认$/ })
+      .filter({ visible: true })
+      .last();
+    if (!await visibleConfirm.isVisible({ timeout: 1000 }).catch(() => false)) {
+      logger.info('  Product timing dialog already closed');
+      return false;
+    }
     await clickFirstVisible([
-      dialog.getByRole('button', { name: '确认' }),
-      dialog.locator('button').filter({ hasText: /^确认$/ }),
-      dialog.locator('.weui-desktop-btn_primary, .ant-btn-primary').filter({ hasText: /确认/ }),
-      page.getByRole('button', { name: '确认' }),
-      page.locator('button').filter({ hasText: /^确认$/ }),
+      visibleConfirm,
     ], 5000);
     await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
     logger.info('  Product timing confirmed');

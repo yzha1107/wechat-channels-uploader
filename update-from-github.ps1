@@ -152,7 +152,7 @@ function Invoke-ZipUpdate {
     )
     $excludeFiles = @(
       "accounts.json", "results.csv", "upload.log", "batch-config.csv",
-      "test-batch.csv", ".update-version", "*.log", "*.xlsx"
+      "test-batch.csv", "ark-api-key.txt", ".update-version", "*.log", "*.xlsx"
     )
 
     $args = @(

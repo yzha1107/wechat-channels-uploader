@@ -379,6 +379,7 @@ async function selectShoppingCartProduct(page, productName) {
     await page.waitForTimeout(500);
   });
   logger.info(`  Product selected: ${name}`);
+  await handleProductTimingDialog(page);
 }
 
 async function setCover(page, coverPath) {
@@ -414,6 +415,7 @@ async function verifyPublish(page) {
 }
 
 async function handleOriginalDeclarationDialog(page) {
+  await handleProductTimingDialog(page);
   const hasDialog = await page.getByText(/声明原创的视频有机会获得广告分成|原创权益/).first().isVisible({ timeout: 3000 }).catch(() => false);
   if (!hasDialog) return false;
 
@@ -511,19 +513,21 @@ async function clearBlockingProductDialog(page) {
 }
 
 async function handleProductTimingDialog(page) {
-  const dialog = page
-    .locator('.weui-desktop-dialog__wrp, .weui-desktop-dialog, .ant-modal, [role="dialog"]')
-    .filter({ hasText: /选择商品出现时机|商品出现时机|视频播放5秒后出现|自定义出现时机/ })
-    .filter({ visible: true })
-    .last();
-  if (!await dialog.isVisible({ timeout: 1000 }).catch(() => false)) return false;
+  const marker = page.getByText(/选择商品出现时机|商品出现时机|视频播放5秒后出现|自定义出现时机/).first();
+  if (!await marker.isVisible({ timeout: 1500 }).catch(() => false)) return false;
 
   try {
     logger.info('  Handling product timing dialog');
+    const dialog = page
+      .locator('.sale-visible-dialog, .weui-desktop-dialog__wrp, .weui-desktop-dialog, .ant-modal, [role="dialog"]')
+      .filter({ hasText: /选择商品出现时机|商品出现时机|视频播放5秒后出现|自定义出现时机/ })
+      .last();
     await clickFirstVisible([
       dialog.getByRole('button', { name: '确认' }),
       dialog.locator('button').filter({ hasText: /^确认$/ }),
       dialog.locator('.weui-desktop-btn_primary, .ant-btn-primary').filter({ hasText: /确认/ }),
+      page.getByRole('button', { name: '确认' }),
+      page.locator('button').filter({ hasText: /^确认$/ }),
     ], 5000);
     await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
     logger.info('  Product timing confirmed');

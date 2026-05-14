@@ -397,7 +397,6 @@ app.post('/api/upload/start', async (req, res) => {
           results,
           intervalMinutes,
           abortSignal: uploadState,
-          onPublished: deleteUploadedVideoFile,
           onRecordStart: (p) => { recordStartedAt = p.startedAt; },
           onProgress: (p) => {
             broadcast({
@@ -436,7 +435,6 @@ app.post('/api/upload/start', async (req, res) => {
         resume: true,
         intervalMinutes,
         abortSignal: uploadState,
-        onPublished: deleteUploadedVideoFile,
         onProgress: (p) => {
           broadcast({ type: 'progress', current: p.current, total: p.total, status: p.status, title: p.title, account: acct.label || acct.name });
         },

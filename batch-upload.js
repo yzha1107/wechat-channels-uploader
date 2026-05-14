@@ -510,6 +510,30 @@ async function clearBlockingProductDialog(page) {
   await blocking.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
 }
 
+async function handleProductTimingDialog(page) {
+  const dialog = page
+    .locator('.weui-desktop-dialog__wrp, .weui-desktop-dialog, .ant-modal, [role="dialog"]')
+    .filter({ hasText: /选择商品出现时机|商品出现时机|视频播放5秒后出现|自定义出现时机/ })
+    .filter({ visible: true })
+    .last();
+  if (!await dialog.isVisible({ timeout: 1000 }).catch(() => false)) return false;
+
+  try {
+    logger.info('  Handling product timing dialog');
+    await clickFirstVisible([
+      dialog.getByRole('button', { name: '确认' }),
+      dialog.locator('button').filter({ hasText: /^确认$/ }),
+      dialog.locator('.weui-desktop-btn_primary, .ant-btn-primary').filter({ hasText: /确认/ }),
+    ], 5000);
+    await dialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+    logger.info('  Product timing confirmed');
+    return true;
+  } catch (e) {
+    logger.warn(`  Product timing dialog skipped: ${e.message}`);
+    return false;
+  }
+}
+
 async function processVideo(browserContext, record) {
   const page = await getMainPage(browserContext);
   const result = { video_path: record.video_path, title: record.title, status: 'unknown', error: '', _errorType: 'fatal', _loginExpired: false };
@@ -562,6 +586,7 @@ async function processVideo(browserContext, record) {
       logger.info('  Product attach disabled by policy');
     }
     if (record.short_drama_name) await selectShortDrama(page, record.short_drama_name);
+    await handleProductTimingDialog(page);
     const originalPolicy = String(record.original_policy || 'best_effort').trim().toLowerCase();
     if (originalPolicy !== 'none') {
       try {
@@ -578,6 +603,7 @@ async function processVideo(browserContext, record) {
       logger.info('  Original declaration disabled by policy');
     }
     await clearBlockingProductDialog(page);
+    await handleProductTimingDialog(page);
 
     logger.info('  Clicking 发表...');
     await page.getByRole('button', { name: '发表' }).click();
@@ -764,5 +790,6 @@ module.exports = {
   initBrowser, unlockProfile, loginFlow, batchUpload, processVideo, preflightRecords, loadCSV, validateTitle, writeResults, loadPublishedTitles,
   // Helpers
   classifyError, isLogin, waitForUploadWithProgress, selectShortDrama, selectShoppingCartProduct, setCover, hideLocation, verifyPublish,
+  handleProductTimingDialog,
   waitUntil, waitBetweenUploads, handleLoginExpired, probeVideo, logger, notifyUser, checkLoginState,
 };

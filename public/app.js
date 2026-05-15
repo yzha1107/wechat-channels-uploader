@@ -756,6 +756,21 @@ function stopUpload() {
   toast('正在停止...', 'info');
 }
 
+$('formInterval').addEventListener('change', async () => {
+  if (!uploadRunning) return;
+  const intervalMinutes = parseInt($('formInterval').value, 10) || 0;
+  try {
+    const res = await api('/api/upload/interval', {
+      method: 'POST',
+      body: JSON.stringify({ intervalMinutes }),
+    });
+    if (!res.ok) throw new Error(res.status);
+    toast('间隔时间已更新', 'success');
+  } catch (e) {
+    toast('间隔时间更新失败: ' + e.message, 'error');
+  }
+});
+
 function onProgress(data) {
   const idx = data.current - 1;
   if (idx >= 0 && idx < entries.length) {

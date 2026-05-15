@@ -2,6 +2,7 @@ node_modules/
 browser-profile/
 browser-profile-*/
 uploads/
+uploaded-videos/
 screenshots/
 runtime/
 installers/*

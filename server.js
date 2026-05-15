@@ -17,6 +17,7 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const GENERATED_COVERS_DIR = path.join(UPLOADS_DIR, 'covers');
 if (!fs.existsSync(GENERATED_COVERS_DIR)) fs.mkdirSync(GENERATED_COVERS_DIR, { recursive: true });
+const UPLOADED_VIDEOS_DIR = path.join(__dirname, 'uploaded-videos');
 const INSTALLERS_DIR = path.join(__dirname, 'installers');
 
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.avi', '.mkv', '.webm']);
@@ -133,7 +134,7 @@ logger.error = (msg) => { origError(msg); broadcast({ type: 'log', level: 'ERROR
 
 // ── State ──
 let activeContexts = {};
-let uploadState = { running: false, abort: false };
+let uploadState = { running: false, abort: false, intervalMinutes: 0 };
 
 function rememberContext(accountName, ctx) {
   activeContexts[accountName] = ctx;
@@ -147,7 +148,31 @@ function forgetContext(accountName, ctx) {
   if (activeContexts[accountName] === ctx) delete activeContexts[accountName];
 }
 
-function deleteUploadedVideoFile(result, record) {
+async function closeAccountContext(accountName, reason = '') {
+  const ctx = activeContexts[accountName];
+  if (!ctx) return;
+  try {
+    await ctx.close();
+    logger.info(`Closed browser for ${accountName}${reason ? ` (${reason})` : ''}`);
+  } catch (e) {
+    logger.warn(`Could not close browser for ${accountName}: ${e.message}`);
+  } finally {
+    forgetContext(accountName, ctx);
+  }
+}
+
+function uniqueMoveTarget(dir, fileName) {
+  const parsed = path.parse(fileName);
+  let target = path.join(dir, fileName);
+  let n = 1;
+  while (fs.existsSync(target)) {
+    target = path.join(dir, `${parsed.name}-${n}${parsed.ext}`);
+    n += 1;
+  }
+  return target;
+}
+
+function moveUploadedVideoFile(result, record) {
   const rawPath = String(result.video_path || record.video_path || '').trim();
   if (!rawPath) return;
   const videoPath = path.resolve(rawPath);
@@ -163,28 +188,27 @@ function deleteUploadedVideoFile(result, record) {
     }
     const ext = path.extname(videoPath).toLowerCase();
     if (!VIDEO_EXTS.has(ext)) {
-      logger.warn(`Skip deleting unexpected upload file type: ${videoPath}`);
+      logger.warn(`Skip moving unexpected upload file type: ${videoPath}`);
       return;
     }
-    fs.unlinkSync(videoPath);
-    logger.info(`Deleted uploaded video: ${videoPath}`);
+    fs.mkdirSync(UPLOADED_VIDEOS_DIR, { recursive: true });
+    const targetPath = uniqueMoveTarget(UPLOADED_VIDEOS_DIR, path.basename(videoPath));
+    try {
+      fs.renameSync(videoPath, targetPath);
+    } catch (e) {
+      if (e.code !== 'EXDEV') throw e;
+      fs.copyFileSync(videoPath, targetPath);
+      fs.unlinkSync(videoPath);
+    }
+    logger.info(`Moved uploaded video: ${videoPath} -> ${targetPath}`);
   } catch (e) {
-    logger.warn(`Could not delete uploaded video ${videoPath}: ${e.message}`);
+    logger.warn(`Could not move uploaded video ${videoPath}: ${e.message}`);
   }
 }
 
 async function closeUploadContexts(accountNames) {
   for (const accountName of accountNames) {
-    const ctx = activeContexts[accountName];
-    if (!ctx) continue;
-    try {
-      await ctx.close();
-      logger.info(`Closed browser for ${accountName}`);
-    } catch (e) {
-      logger.warn(`Could not close browser for ${accountName}: ${e.message}`);
-    } finally {
-      forgetContext(accountName, ctx);
-    }
+    await closeAccountContext(accountName);
   }
 }
 
@@ -275,6 +299,7 @@ app.post('/api/accounts/:name/login/done', async (req, res) => {
     }
 
     accounts.updateAccountStatus(req.params.name, 'ready');
+    await closeAccountContext(req.params.name, 'login verified');
     res.json({ message: 'Login verified', state });
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -288,12 +313,12 @@ app.get('/api/accounts/:name/login/status', async (req, res) => {
 
     let ctx = activeContexts[req.params.name];
     if (!ctx) {
-      unlockProfile(acct.profileDir);
-      ctx = rememberContext(req.params.name, await initBrowser(acct.profileDir));
+      return res.json({ loggedIn: false, url: '', reason: 'browser-not-open' });
     }
 
     const state = await checkLoginState(ctx, { timeout: 5000, navigate: false });
     accounts.updateAccountStatus(req.params.name, state.loggedIn ? 'ready' : 'needs-login');
+    if (state.loggedIn) await closeAccountContext(req.params.name, 'login verified');
     res.json(state);
   } catch (e) {
     logger.error(`Login browser failed for ${req.params.name}: ${e.message}`);
@@ -340,6 +365,7 @@ app.post('/api/upload/start', async (req, res) => {
   // Run async in background
   uploadState.running = true;
   uploadState.abort = false;
+  uploadState.intervalMinutes = intervalMinutes;
   const uploadContextAccounts = new Set();
 
   try {
@@ -366,7 +392,7 @@ app.post('/api/upload/start', async (req, res) => {
       return;
     }
     logger.info(`Preflight: ${validCount} valid, ${records.length - validCount} skipped`);
-    logger.info(`Upload interval: ${intervalMinutes} min`);
+    logger.info(`Upload interval: ${uploadState.intervalMinutes} min`);
 
     let results;
     if (roundRobin) {
@@ -395,9 +421,10 @@ app.post('/api/upload/start', async (req, res) => {
         results = await batchUpload(ctx, [record], {
           resume: false,
           results,
-          intervalMinutes,
+          getIntervalMinutes: () => uploadState.intervalMinutes,
           abortSignal: uploadState,
           onRecordStart: (p) => { recordStartedAt = p.startedAt; },
+          onPublished: moveUploadedVideoFile,
           onProgress: (p) => {
             broadcast({
               type: 'progress',
@@ -417,8 +444,8 @@ app.post('/api/upload/start', async (req, res) => {
         await closeUploadContexts(new Set([acct.name]));
         if (results.length === before && uploadState.abort) break;
         const nextRecord = records[i + 1];
-        if (intervalMinutes > 0 && nextRecord && !uploadState.abort && recordStartedAt) {
-          await waitBetweenUploads(intervalMinutes, uploadState, recordStartedAt);
+        if (nextRecord && !uploadState.abort && recordStartedAt) {
+          await waitBetweenUploads(() => uploadState.intervalMinutes, uploadState, recordStartedAt);
         }
       }
       writeResults(results, RESULTS_PATH);
@@ -433,8 +460,9 @@ app.post('/api/upload/start', async (req, res) => {
 
       results = await batchUpload(ctx, records, {
         resume: true,
-        intervalMinutes,
+        getIntervalMinutes: () => uploadState.intervalMinutes,
         abortSignal: uploadState,
+        onPublished: moveUploadedVideoFile,
         onProgress: (p) => {
           broadcast({ type: 'progress', current: p.current, total: p.total, status: p.status, title: p.title, account: acct.label || acct.name });
         },
@@ -457,8 +485,15 @@ app.post('/api/upload/stop', (req, res) => {
   res.json({ message: 'Stopping after current video' });
 });
 
+app.post('/api/upload/interval', (req, res) => {
+  const intervalMinutes = Math.max(0, Math.min(1440, Number.parseInt(req.body.intervalMinutes, 10) || 0));
+  uploadState.intervalMinutes = intervalMinutes;
+  logger.info(`Upload interval updated: ${intervalMinutes} min`);
+  res.json({ intervalMinutes });
+});
+
 app.get('/api/upload/status', (req, res) => {
-  res.json({ running: uploadState.running, abort: uploadState.abort });
+  res.json({ running: uploadState.running, abort: uploadState.abort, intervalMinutes: uploadState.intervalMinutes });
 });
 
 // File upload (drag-drop support)

@@ -646,20 +646,26 @@ async function waitUntil(targetTime) {
 }
 
 async function waitBetweenUploads(intervalMinutes, abortSignal, startedAt) {
+  const getIntervalMinutes = typeof intervalMinutes === 'function' ? intervalMinutes : () => intervalMinutes;
+  intervalMinutes = Math.max(0, Math.min(1440, Number.parseInt(getIntervalMinutes(), 10) || 0));
   if (!intervalMinutes || intervalMinutes <= 0) return;
-  const waitMs = intervalMinutes * 60 * 1000;
+  const started = startedAt || Date.now();
+  let waitMs = intervalMinutes * 60 * 1000;
   const elapsedMs = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
   const remainingMs = Math.max(0, waitMs - elapsedMs);
   if (remainingMs <= 0) {
     logger.info(`  Interval ${intervalMinutes} min already elapsed, starting next upload...`);
     return;
   }
-  const end = Date.now() + remainingMs;
   const waitMinutes = Math.ceil(remainingMs / 1000 / 60);
   logger.info(`  Waiting ${waitMinutes} min before next upload...`);
-  while (Date.now() < end) {
+  while (true) {
     if (abortSignal && (abortSignal.aborted || abortSignal.abort)) return;
-    await new Promise(r => setTimeout(r, Math.min(1000, end - Date.now())));
+    intervalMinutes = Math.max(0, Math.min(1440, Number.parseInt(getIntervalMinutes(), 10) || 0));
+    waitMs = intervalMinutes * 60 * 1000;
+    const remaining = Math.max(0, waitMs - Math.max(0, Date.now() - started));
+    if (remaining <= 0) return;
+    await new Promise(r => setTimeout(r, Math.min(1000, remaining)));
   }
 }
 
@@ -671,7 +677,9 @@ function handleLoginExpired() {
 // ── Batch process (used by both CLI and server) ──
 async function batchUpload(browserContext, records, options = {}) {
   const { resultsPath = RESULTS_PATH, resume = false, results: existingResults = [], abortSignal, onProgress, onPublished, onRecordStart } = options;
-  const intervalMinutes = Math.max(0, Math.min(1440, Number.parseInt(options.intervalMinutes, 10) || 0));
+  const getIntervalMinutes = typeof options.getIntervalMinutes === 'function'
+    ? options.getIntervalMinutes
+    : () => options.intervalMinutes;
   const results = existingResults.slice();
   const publishedSet = loadPublishedTitles(resultsPath, resume);
   let loginExpired = false;
@@ -730,7 +738,7 @@ async function batchUpload(browserContext, records, options = {}) {
 
     const nextRecord = records[i + 1];
     if (!loginExpired && nextRecord) {
-      await waitBetweenUploads(intervalMinutes, abortSignal, startedAt);
+      await waitBetweenUploads(getIntervalMinutes, abortSignal, startedAt);
     }
   }
   return results;

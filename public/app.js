@@ -689,6 +689,11 @@ function autoStartWatchedUploads() {
    ═══════════════════════════════════════════════ */
 $('startBtn').addEventListener('click', startUpload);
 $('stopBtn').addEventListener('click', stopUpload);
+$('accountSelect').addEventListener('change', () => {
+  renderRoundRobinStartSelect($('roundRobinStartSelect').value);
+  renderEntries();
+});
+$('roundRobinStartSelect').addEventListener('change', renderEntries);
 
 function generateCSV() {
   const header = 'video_path,title,description,short_drama_name,publish_time,cover_path,shopping_cart,product_policy,original_policy,location,link,activity,original,category,collection';
@@ -706,8 +711,10 @@ function generateCSV() {
 
 async function startUpload() {
   const account = $('accountSelect').value;
+  const roundRobinStartAccount = account === '__round_robin__' ? $('roundRobinStartSelect').value : '';
   const selectedAccounts = getSelectedUploadAccounts();
   if (selectedAccounts.length === 0) return toast('请选择已登录账号，或先去账号页扫码登录', 'error');
+  if (account === '__round_robin__' && roundRobinStartAccount && !selectedAccounts.some(a => a.name === roundRobinStartAccount)) return toast('首发账号未登录，请重新选择', 'error');
   if (account !== '__round_robin__' && selectedAccounts[0].status !== 'ready') return toast('该账号未登录，请先扫码登录', 'error');
   if (!account) return toast('请先在左侧选择发布账号', 'error');
   if (entries.length === 0) return toast('请先添加视频', 'error');
@@ -737,7 +744,7 @@ async function startUpload() {
     const intervalMinutes = parseInt($('formInterval').value, 10) || 0;
     const res = await api('/api/upload/start', {
       method: 'POST',
-      body: JSON.stringify({ account, csv, intervalMinutes }),
+      body: JSON.stringify({ account, csv, intervalMinutes, roundRobinStartAccount }),
     });
     if (!res.ok) {
       const d = await res.json();
@@ -936,6 +943,8 @@ renderAccounts = function() {
 
 renderAccountSelect = function() {
   const sel = $('accountSelect');
+  const previous = sel.value;
+  const previousStart = $('roundRobinStartSelect').value;
   const readyAccounts = accounts.filter(a => a.status === 'ready');
   const options = [];
   if (readyAccounts.length > 1) {
@@ -945,13 +954,33 @@ renderAccountSelect = function() {
     '<option value="' + esc(a.name) + '">' + esc(a.label) + (a.status === 'ready' ? '' : ' (未登录)') + '</option>'
   ));
   sel.innerHTML = options.join('');
+  if ([...sel.options].some(o => o.value === previous)) sel.value = previous;
+  renderRoundRobinStartSelect(previousStart);
 };
 
 function getSelectedUploadAccounts() {
   const selected = $('accountSelect').value;
-  if (selected === '__round_robin__') return accounts.filter(a => a.status === 'ready');
+  if (selected === '__round_robin__') {
+    const readyAccounts = accounts.filter(a => a.status === 'ready');
+    const startAccount = $('roundRobinStartSelect').value;
+    const startIndex = readyAccounts.findIndex(a => a.name === startAccount);
+    if (startIndex < 0) return readyAccounts;
+    return readyAccounts.slice(startIndex).concat(readyAccounts.slice(0, startIndex));
+  }
   const account = accounts.find(a => a.name === selected);
   return account ? [account] : [];
+}
+
+function renderRoundRobinStartSelect(previousStart) {
+  const wrap = $('roundRobinStartWrap');
+  const sel = $('roundRobinStartSelect');
+  const readyAccounts = accounts.filter(a => a.status === 'ready');
+  const isRoundRobin = $('accountSelect').value === '__round_robin__' && readyAccounts.length > 1;
+  wrap.hidden = !isRoundRobin;
+  sel.innerHTML = '<option value="">自动接上次</option>' + readyAccounts.map(a =>
+    '<option value="' + esc(a.name) + '">' + esc(a.label || a.name) + '</option>'
+  ).join('');
+  if (previousStart && readyAccounts.some(a => a.name === previousStart)) sel.value = previousStart;
 }
 
 function accountLabelForEntry(index) {

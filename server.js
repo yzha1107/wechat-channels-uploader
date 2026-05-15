@@ -13,6 +13,7 @@ const {
 } = require('./batch-upload');
 
 const PORT = process.env.PORT || 3000;
+const UPLOAD_STATE_PATH = path.join(__dirname, 'upload-state.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const GENERATED_COVERS_DIR = path.join(UPLOADS_DIR, 'covers');
@@ -170,6 +171,67 @@ function uniqueMoveTarget(dir, fileName) {
     n += 1;
   }
   return target;
+}
+
+function loadUploadState() {
+  try {
+    if (!fs.existsSync(UPLOAD_STATE_PATH)) return {};
+    return JSON.parse(fs.readFileSync(UPLOAD_STATE_PATH, 'utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveUploadState(state) {
+  const tmpPath = path.join(__dirname, `.upload-state.${process.pid}.${Date.now()}.tmp`);
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
+  fs.renameSync(tmpPath, UPLOAD_STATE_PATH);
+}
+
+function getAccountStats(state, accountName) {
+  state.accountStats ||= {};
+  state.accountStats[accountName] ||= {
+    attemptedTotal: 0,
+    publishedTotal: 0,
+    lastAttemptAt: null,
+    lastPublishedAt: null,
+  };
+  return state.accountStats[accountName];
+}
+
+function rotateAccountsFrom(uploadAccounts, startAccountName) {
+  const startIndex = uploadAccounts.findIndex(a => a.name === startAccountName);
+  if (startIndex <= 0) return uploadAccounts;
+  return uploadAccounts.slice(startIndex).concat(uploadAccounts.slice(0, startIndex));
+}
+
+function resolveRoundRobinAccounts(uploadAccounts, requestedStartAccount) {
+  const state = loadUploadState();
+  const requested = String(requestedStartAccount || '').trim();
+  const startAccount = requested || String(state.roundRobin?.nextAccountName || '').trim();
+  if (requested && !uploadAccounts.some(a => a.name === requested)) {
+    const err = new Error('Round-robin start account is not ready');
+    err.statusCode = 400;
+    throw err;
+  }
+  return rotateAccountsFrom(uploadAccounts, startAccount);
+}
+
+function rememberRoundRobinAttempt(accountName, nextAccountName, latestResult) {
+  const state = loadUploadState();
+  const now = new Date().toISOString();
+  state.roundRobin ||= {};
+  state.roundRobin.nextAccountName = nextAccountName || accountName;
+  state.roundRobin.updatedAt = now;
+
+  const stats = getAccountStats(state, accountName);
+  stats.attemptedTotal += 1;
+  stats.lastAttemptAt = now;
+  if (latestResult?.status === 'published') {
+    stats.publishedTotal += 1;
+    stats.lastPublishedAt = now;
+  }
+  saveUploadState(state);
 }
 
 function moveUploadedVideoFile(result, record) {
@@ -350,11 +412,18 @@ app.post('/api/upload/start', async (req, res) => {
   if (!csvContent) return res.status(400).json({ error: 'csv content required' });
 
   const roundRobin = accountName === '__round_robin__';
-  const uploadAccounts = roundRobin
+  let uploadAccounts = roundRobin
     ? accounts.loadAccounts().filter(a => a.status === 'ready')
     : [accounts.getAccount(accountName)].filter(Boolean);
   if (uploadAccounts.length === 0) {
     return res.status(roundRobin ? 400 : 404).json({ error: roundRobin ? 'No ready accounts found' : 'Account not found' });
+  }
+  if (roundRobin) {
+    try {
+      uploadAccounts = resolveRoundRobinAccounts(uploadAccounts, req.body.roundRobinStartAccount);
+    } catch (e) {
+      return res.status(e.statusCode || 500).json({ error: e.message });
+    }
   }
   if (!roundRobin && uploadAccounts[0].status !== 'ready') {
     return res.status(400).json({ error: 'Account is not logged in' });
@@ -438,7 +507,10 @@ app.post('/api/upload/start', async (req, res) => {
         });
 
         const latest = results[results.length - 1];
-        if (latest && latest._loginExpired) {
+        const newResult = results.length > before ? latest : null;
+        const nextAcct = uploadAccounts[(i + 1) % uploadAccounts.length];
+        rememberRoundRobinAttempt(acct.name, nextAcct?.name, newResult);
+        if (newResult && newResult._loginExpired) {
           accounts.updateAccountStatus(acct.name, 'needs-login');
         }
         await closeUploadContexts(new Set([acct.name]));

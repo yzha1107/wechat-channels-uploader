@@ -3,6 +3,8 @@ const path = require('path');
 
 const ACCOUNTS_PATH = path.join(__dirname, 'accounts.json');
 const BASE_PROFILE_DIR = path.join(__dirname, 'browser-profile');
+const SAVE_RETRIES = 10;
+const SAVE_RETRY_DELAY_MS = 200;
 
 const DEFAULT_ACCOUNTS = [
   { name: 'default', profileDir: BASE_PROFILE_DIR, label: '主账号', status: 'needs-login', lastLogin: null, createdAt: null },
@@ -34,6 +36,10 @@ function serializeAccount(account) {
   return stored;
 }
 
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function loadAccounts() {
   if (!fs.existsSync(ACCOUNTS_PATH)) {
     saveAccounts(DEFAULT_ACCOUNTS);
@@ -51,7 +57,25 @@ function loadAccounts() {
 }
 
 function saveAccounts(accounts) {
-  fs.writeFileSync(ACCOUNTS_PATH, JSON.stringify(accounts.map(serializeAccount), null, 2), 'utf-8');
+  const dir = path.dirname(ACCOUNTS_PATH);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = path.join(dir, `.accounts.${process.pid}.${Date.now()}.tmp`);
+  const data = JSON.stringify(accounts.map(serializeAccount), null, 2);
+
+  for (let attempt = 1; attempt <= SAVE_RETRIES; attempt++) {
+    try {
+      if (fs.existsSync(ACCOUNTS_PATH)) {
+        try { fs.chmodSync(ACCOUNTS_PATH, 0o666); } catch {}
+      }
+      fs.writeFileSync(tmpPath, data, 'utf-8');
+      fs.renameSync(tmpPath, ACCOUNTS_PATH);
+      return;
+    } catch (e) {
+      try { if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true }); } catch {}
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(e.code) || attempt === SAVE_RETRIES) throw e;
+      sleep(SAVE_RETRY_DELAY_MS);
+    }
+  }
 }
 
 function getAccount(name) {

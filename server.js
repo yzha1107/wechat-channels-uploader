@@ -199,6 +199,14 @@ function getAccountStats(state, accountName) {
   return state.accountStats[accountName];
 }
 
+function roundRobinPayload(state = loadUploadState()) {
+  return {
+    nextAccountName: state.roundRobin?.nextAccountName || '',
+    updatedAt: state.roundRobin?.updatedAt || null,
+    accountStats: state.accountStats || {},
+  };
+}
+
 function rotateAccountsFrom(uploadAccounts, startAccountName) {
   const startIndex = uploadAccounts.findIndex(a => a.name === startAccountName);
   if (startIndex <= 0) return uploadAccounts;
@@ -232,6 +240,7 @@ function rememberRoundRobinAttempt(accountName, nextAccountName, latestResult) {
     stats.lastPublishedAt = now;
   }
   saveUploadState(state);
+  broadcast({ type: 'round-robin', ...roundRobinPayload(state) });
 }
 
 function moveUploadedVideoFile(result, record) {
@@ -279,6 +288,31 @@ async function closeUploadContexts(accountNames) {
 // Accounts
 app.get('/api/accounts', (req, res) => {
   res.json(accounts.loadAccounts());
+});
+
+app.get('/api/upload/round-robin', (req, res) => {
+  res.json(roundRobinPayload());
+});
+
+app.patch('/api/upload/round-robin', (req, res) => {
+  try {
+    const nextAccountName = String(req.body.nextAccountName || '').trim();
+    const readyAccounts = accounts.loadAccounts().filter(a => a.status === 'ready');
+    if (nextAccountName && !readyAccounts.some(a => a.name === nextAccountName)) {
+      return res.status(400).json({ error: '账号未登录，不能设为当前轮播账号' });
+    }
+
+    const state = loadUploadState();
+    state.roundRobin ||= {};
+    state.roundRobin.nextAccountName = nextAccountName;
+    state.roundRobin.updatedAt = new Date().toISOString();
+    saveUploadState(state);
+    const payload = roundRobinPayload(state);
+    broadcast({ type: 'round-robin', ...payload });
+    res.json(payload);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.post('/api/accounts', (req, res) => {
@@ -420,7 +454,7 @@ app.post('/api/upload/start', async (req, res) => {
   }
   if (roundRobin) {
     try {
-      uploadAccounts = resolveRoundRobinAccounts(uploadAccounts, req.body.roundRobinStartAccount);
+      uploadAccounts = resolveRoundRobinAccounts(uploadAccounts, req.body.nextAccountName || req.body.roundRobinStartAccount);
     } catch (e) {
       return res.status(e.statusCode || 500).json({ error: e.message });
     }
@@ -436,6 +470,7 @@ app.post('/api/upload/start', async (req, res) => {
   uploadState.abort = false;
   uploadState.intervalMinutes = intervalMinutes;
   const uploadContextAccounts = new Set();
+  uploadState.contextAccounts = uploadContextAccounts;
 
   try {
     // Parse CSV
@@ -549,12 +584,15 @@ app.post('/api/upload/start', async (req, res) => {
   } finally {
     await closeUploadContexts(uploadContextAccounts);
     uploadState.running = false;
+    uploadState.contextAccounts = null;
   }
 });
 
-app.post('/api/upload/stop', (req, res) => {
+app.post('/api/upload/stop', async (req, res) => {
   uploadState.abort = true;
-  res.json({ message: 'Stopping after current video' });
+  const contextAccounts = uploadState.contextAccounts || new Set();
+  await closeUploadContexts(contextAccounts);
+  res.json({ message: 'Upload stopped' });
 });
 
 app.post('/api/upload/interval', (req, res) => {

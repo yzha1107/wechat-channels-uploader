@@ -190,7 +190,7 @@ async function initBrowser(profileDir) {
     headless: false,
     viewport: { width: 1440, height: 900 },
     locale: 'zh-CN',
-    args: ['--no-first-run', '--no-default-browser-check'],
+    args: ['--no-first-run', '--no-default-browser-check', '--mute-audio'],
   };
   if (chromePath) {
     logger.info(`Using Chrome: ${chromePath}`);
@@ -720,14 +720,24 @@ async function batchUpload(browserContext, records, options = {}) {
 
     let result = null;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (abortSignal && (abortSignal.aborted || abortSignal.abort)) {
+        logger.warn('Upload aborted by user');
+        break;
+      }
       if (attempt > 0) {
         logger.info(`  Retry ${attempt}/${MAX_RETRIES}`);
         await new Promise(r => setTimeout(r, 3000));
+        if (abortSignal && (abortSignal.aborted || abortSignal.abort)) {
+          logger.warn('Upload aborted by user');
+          break;
+        }
       }
       result = await processVideo(browserContext, record);
+      if (abortSignal && (abortSignal.aborted || abortSignal.abort)) break;
       if (result.status === 'published' || result._errorType === 'login-expired' || result._errorType === 'title-error') break;
     }
 
+    if (!result) break;
     results.push(result);
     if (result._loginExpired) { loginExpired = true; handleLoginExpired(); }
     writeResults(results, resultsPath);
